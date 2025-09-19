@@ -1,34 +1,32 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 import yt_dlp
-import tempfile
-import os
+import requests
 
 app = FastAPI()
 
-@app.get("/download")
-def download_video(url: str = Query(..., description="URL do vídeo do YouTube")):
-    # Cria arquivo temporário no servidor (só enquanto transmite)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    temp_file.close()
+@app.get("/")
+def root():
+    return {"message": "API LoadTube está online 🚀"}
+
+@app.post("/download")
+async def download_video(request: Request):
+    data = await request.json()
+    url = data.get("url")
 
     ydl_opts = {
         "format": "best",
-        "outtmpl": temp_file.name,  # salva temporariamente
+        "quiet": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    def generate():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            stream_url = info["url"]
 
-    # Função para transmitir e apagar o arquivo após envio
-    def iterfile():
-        with open(temp_file.name, mode="rb") as file:
-            yield from file
-        os.remove(temp_file.name)  # limpa após enviar
+            with requests.get(stream_url, stream=True) as r:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
 
-    filename = "video.mp4"
-    return StreamingResponse(
-        iterfile(),
-        media_type="video/mp4",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    return StreamingResponse(generate(), media_type="video/mp4")
