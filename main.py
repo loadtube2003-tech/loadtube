@@ -1,63 +1,45 @@
-from fastapi import FastAPI, Request, Query, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 import yt_dlp
 import requests
-import re
 
 app = FastAPI()
-
-# DURANTE TESTES: permite qualquer origem. Em produção troque para a URL do Lovable.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/")
 def root():
     return {"message": "API LoadTube está online 🚀"}
 
-@app.get("/download")
-def download_get(url: str = Query(..., description="URL do vídeo do YouTube")):
-    return stream_video(url)
-
 @app.post("/download")
-async def download_post(request: Request):
+async def download_video(request: Request):
     data = await request.json()
     url = data.get("url")
-    if not url:
-        raise HTTPException(status_code=400, detail="Missing 'url' in request body")
-    return stream_video(url)
+    quality = data.get("quality", "best")  # valor padrão = melhor qualidade
 
-def _safe_filename(s: str) -> str:
-    return re.sub(r'[^\w\-_\. ]', '_', s).strip()
+    # Mapeamento de qualidades para yt-dlp
+    quality_map = {
+        "audio": "bestaudio/best",
+        "360p": "bestvideo[height<=360]+bestaudio/best",
+        "480p": "bestvideo[height<=480]+bestaudio/best",
+        "720p": "bestvideo[height<=720]+bestaudio/best",
+        "1080p": "bestvideo[height<=1080]+bestaudio/best",
+        "best": "best"
+    }
 
-def stream_video(url: str):
-    ydl_opts = {"format": "best", "quiet": True}
-
-    # pega info / URL do stream sem baixar
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        stream_url = info.get("url")
-        ext = info.get("ext", "mp4")
-        title = info.get("title") or "video"
-        filename = f"{_safe_filename(title)}.{ext}"
-
-    if not stream_url:
-        raise HTTPException(status_code=500, detail="Could not obtain stream URL from yt-dlp")
+    ydl_opts = {
+        "format": quality_map.get(quality, "best"),
+        "quiet": True,
+    }
 
     def generate():
-        with requests.get(stream_url, stream=True) as r:
-            r.raise_for_status()
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            stream_url = info["url"]
 
-    return StreamingResponse(
-        generate(),
-        media_type=f"video/{ext}",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+            with requests.get(stream_url, stream=True) as r:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+
+    # Ajustar o tipo de mídia dependendo da escolha
+    media_type = "audio/mpeg" if quality == "audio" else "video/mp4"
+    return StreamingResponse(generate(), media_type=media_type)
