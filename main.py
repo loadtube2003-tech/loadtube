@@ -2,14 +2,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import yt_dlp
 import requests
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-from fastapi.middleware.cors import CORSMiddleware
-
+# 🔓 Liberar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # libera para qualquer origem
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -19,13 +19,26 @@ app.add_middleware(
 def root():
     return {"message": "API LoadTube está online 🚀"}
 
+# Cabeçalhos HTTP para evitar bloqueio do YouTube
+CUSTOM_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
 # 1️⃣ Listar formatos (vídeo e áudio)
 @app.post("/formats")
 async def get_formats(request: Request):
     data = await request.json()
     url = data.get("url")
 
-    ydl_opts = {"quiet": True}
+    ydl_opts = {
+        "quiet": True,
+        "http_headers": CUSTOM_HEADERS,
+    }
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         formats = []
@@ -34,7 +47,12 @@ async def get_formats(request: Request):
                 "format_id": f["format_id"],
                 "ext": f["ext"],
                 "type": "audio" if f.get("vcodec") == "none" else "video",
-                "resolution": f.get("resolution") or f"{f.get('width')}x{f.get('height')}" if f.get("height") else "audio only",
+                "resolution": (
+                    f.get("resolution")
+                    or f"{f.get('width')}x{f.get('height')}"
+                    if f.get("height")
+                    else "audio only"
+                ),
                 "filesize": f.get("filesize")
             }
             formats.append(entry)
@@ -50,6 +68,7 @@ async def download_media(request: Request):
     ydl_opts = {
         "format": format_id,
         "quiet": True,
+        "http_headers": CUSTOM_HEADERS,
     }
 
     def generate():
@@ -57,7 +76,7 @@ async def download_media(request: Request):
             info = ydl.extract_info(url, download=False)
             stream_url = info["url"]
 
-            with requests.get(stream_url, stream=True) as r:
+            with requests.get(stream_url, stream=True, headers=CUSTOM_HEADERS) as r:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         yield chunk
