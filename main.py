@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import yt_dlp
 import requests
 
@@ -9,24 +9,36 @@ app = FastAPI()
 def root():
     return {"message": "API LoadTube está online 🚀"}
 
-@app.post("/download")
-async def download_video(request: Request):
+# 1️⃣ Listar formatos (vídeo e áudio)
+@app.post("/formats")
+async def get_formats(request: Request):
     data = await request.json()
     url = data.get("url")
-    quality = data.get("quality", "best")  # valor padrão = melhor qualidade
 
-    # Mapeamento de qualidades para yt-dlp
-    quality_map = {
-        "audio": "bestaudio/best",
-        "360p": "bestvideo[height<=360]+bestaudio/best",
-        "480p": "bestvideo[height<=480]+bestaudio/best",
-        "720p": "bestvideo[height<=720]+bestaudio/best",
-        "1080p": "bestvideo[height<=1080]+bestaudio/best",
-        "best": "best"
-    }
+    ydl_opts = {"quiet": True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        formats = []
+        for f in info["formats"]:
+            entry = {
+                "format_id": f["format_id"],
+                "ext": f["ext"],
+                "type": "audio" if f.get("vcodec") == "none" else "video",
+                "resolution": f.get("resolution") or f"{f.get('width')}x{f.get('height')}" if f.get("height") else "audio only",
+                "filesize": f.get("filesize")
+            }
+            formats.append(entry)
+    return JSONResponse(content=formats)
+
+# 2️⃣ Download em formato escolhido (vídeo ou áudio)
+@app.post("/download")
+async def download_media(request: Request):
+    data = await request.json()
+    url = data.get("url")
+    format_id = data.get("format_id", "best")
 
     ydl_opts = {
-        "format": quality_map.get(quality, "best"),
+        "format": format_id,
         "quiet": True,
     }
 
@@ -40,6 +52,7 @@ async def download_video(request: Request):
                     if chunk:
                         yield chunk
 
-    # Ajustar o tipo de mídia dependendo da escolha
-    media_type = "audio/mpeg" if quality == "audio" else "video/mp4"
+    # Se for áudio, muda o tipo de mídia
+    media_type = "audio/mpeg" if format_id.startswith("audio") else "video/mp4"
+
     return StreamingResponse(generate(), media_type=media_type)
